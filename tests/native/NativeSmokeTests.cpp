@@ -3,6 +3,7 @@
 
 #include <windows.h>
 #include <richole.h>
+#include <uxtheme.h>
 
 #include <cstdio>
 #include <cstdint>
@@ -333,6 +334,83 @@ std::wstring ReadWindowText(HWND window) {
     return text;
 }
 
+void CaptureWindowBitmapIfRequested(HWND window) {
+    wchar_t outputPath[32768]{};
+    const DWORD pathLength = GetEnvironmentVariableW(
+        L"LOCAL_MARKDOWN_PREVIEW_CAPTURE",
+        outputPath,
+        static_cast<DWORD>(_countof(outputPath)));
+    if (pathLength == 0 || pathLength >= _countof(outputPath)) {
+        return;
+    }
+
+    RECT windowRect{};
+    Require(GetWindowRect(window, &windowRect) != FALSE,
+            "capture window rectangle is unavailable");
+    const int width = windowRect.right - windowRect.left;
+    const int height = windowRect.bottom - windowRect.top;
+    Require(width > 0 && height > 0, "capture window rectangle is empty");
+
+    HDC screenDc = GetDC(nullptr);
+    Require(screenDc != nullptr, "capture screen DC is unavailable");
+    HDC memoryDc = CreateCompatibleDC(screenDc);
+    ReleaseDC(nullptr, screenDc);
+    Require(memoryDc != nullptr, "capture memory DC is unavailable");
+
+    BITMAPINFO bitmapInfo{};
+    bitmapInfo.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    bitmapInfo.bmiHeader.biWidth = width;
+    bitmapInfo.bmiHeader.biHeight = -height;
+    bitmapInfo.bmiHeader.biPlanes = 1;
+    bitmapInfo.bmiHeader.biBitCount = 32;
+    bitmapInfo.bmiHeader.biCompression = BI_RGB;
+    void* pixels = nullptr;
+    HBITMAP bitmap = CreateDIBSection(
+        memoryDc, &bitmapInfo, DIB_RGB_COLORS, &pixels, nullptr, 0);
+    Require(bitmap != nullptr && pixels != nullptr,
+            "capture bitmap allocation failed");
+    HGDIOBJ previousBitmap = SelectObject(memoryDc, bitmap);
+
+    RedrawWindow(window,
+                 nullptr,
+                 nullptr,
+                 RDW_INVALIDATE | RDW_UPDATENOW | RDW_ERASE | RDW_FRAME);
+    SendMessageW(window,
+                 WM_PRINT,
+                 reinterpret_cast<WPARAM>(memoryDc),
+                 PRF_CLIENT | PRF_NONCLIENT | PRF_ERASEBKGND | PRF_CHILDREN);
+    SelectObject(memoryDc, previousBitmap);
+    DeleteDC(memoryDc);
+
+    BITMAPFILEHEADER fileHeader{};
+    const DWORD pixelBytes = static_cast<DWORD>(width * height * 4);
+    fileHeader.bfType = 0x4D42;
+    fileHeader.bfOffBits = sizeof(BITMAPFILEHEADER) + sizeof(BITMAPINFOHEADER);
+    fileHeader.bfSize = fileHeader.bfOffBits + pixelBytes;
+    HANDLE file = CreateFileW(outputPath,
+                              GENERIC_WRITE,
+                              0,
+                              nullptr,
+                              CREATE_ALWAYS,
+                              FILE_ATTRIBUTE_NORMAL,
+                              nullptr);
+    Require(file != INVALID_HANDLE_VALUE, "capture output file creation failed");
+    DWORD written = 0;
+    BOOL ok = WriteFile(file, &fileHeader, sizeof(fileHeader), &written, nullptr);
+    ok = ok != FALSE && written == sizeof(fileHeader) &&
+         WriteFile(file,
+                   &bitmapInfo.bmiHeader,
+                   sizeof(bitmapInfo.bmiHeader),
+                   &written,
+                   nullptr) != FALSE &&
+         written == sizeof(bitmapInfo.bmiHeader) &&
+         WriteFile(file, pixels, pixelBytes, &written, nullptr) != FALSE &&
+         written == pixelBytes;
+    CloseHandle(file);
+    DeleteObject(bitmap);
+    Require(ok, "capture output file write failed");
+}
+
 std::vector<BYTE> Utf8Bytes(const char* text) {
     const size_t length = std::strlen(text);
     return std::vector<BYTE>(reinterpret_cast<const BYTE*>(text),
@@ -363,6 +441,7 @@ public:
         WriteFile(_imagePath, bitmap.data(), bitmap.size());
         static constexpr char markdown[] =
             "# \xe6\xa0\x87\xe9\xa2\x98\n\n\xe4\xbd\xa0\xe5\xa5\xbd\n\n"
+            "This is a deliberately long paragraph used to confirm that Markdown text automatically wraps when the Explorer preview pane is narrow and reflows when the pane becomes wider.\n\n"
             "> quote\n\n`inline` and [link](https://example.com)\n\n"
             "```txt\ncode block\n```\n\n"
             "| A | B |\n|---|---|\n| 1 | 2 |\n\n"
@@ -561,6 +640,20 @@ void RunSmoke(const std::wstring& dllPath) {
     HWND previewWindow = nullptr;
     RequireHr(oleWindow->GetWindow(&previewWindow), S_OK, "GetWindow failed after DoPreview");
     Require(previewWindow != nullptr && IsWindow(previewWindow), "preview window is invalid");
+    const LONG_PTR previewStyle = GetWindowLongPtrW(previewWindow, GWL_STYLE);
+    Require((previewStyle & WS_VSCROLL) != 0, "vertical scrolling is unavailable");
+    Require((previewStyle & ES_AUTOHSCROLL) == 0, "automatic horizontal scrolling is enabled");
+    HTHEME scrollbarTheme = OpenThemeData(previewWindow, L"ScrollBar");
+    Require(scrollbarTheme != nullptr, "themed scrollbar data is unavailable");
+    CloseThemeData(scrollbarTheme);
+    const LRESULT narrowLineCount = SendMessageW(previewWindow, EM_GETLINECOUNT, 0, 0);
+    RECT wideRect{4, 5, 640, 300};
+    RequireHr(preview->SetRect(&wideRect), S_OK, "SetRect failed for wide wrapping test");
+    const LRESULT wideLineCount = SendMessageW(previewWindow, EM_GETLINECOUNT, 0, 0);
+    Require(wideLineCount < narrowLineCount,
+            "preview text did not reflow when the pane became wider");
+    RequireHr(preview->SetRect(&movedRect), S_OK, "SetRect failed after wrapping test");
+    CaptureWindowBitmapIfRequested(previewWindow);
     const std::wstring previewText = ReadWindowText(previewWindow);
     Require(previewText.find(L"标题") != std::wstring::npos, "UTF-8 text was not displayed");
     Require(previewText.find(L"# 标题") == std::wstring::npos,

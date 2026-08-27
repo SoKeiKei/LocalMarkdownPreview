@@ -5,6 +5,7 @@
 #include <shlwapi.h>
 #include <shlobj_core.h>
 #include <richole.h>
+#include <uxtheme.h>
 
 #include <algorithm>
 #include <cstdint>
@@ -35,6 +36,46 @@ struct SystemVisualTheme {
     COLORREF text = RGB(31, 31, 31);
     COLORREF accent = RGB(0, 95, 184);
 };
+
+enum class PreferredAppMode {
+    Default,
+    AllowDark,
+    ForceDark,
+    ForceLight,
+    Max
+};
+
+using SetPreferredAppModeFunction = PreferredAppMode(WINAPI*)(PreferredAppMode);
+using AllowDarkModeForWindowFunction = BOOL(WINAPI*)(HWND, BOOL);
+using RefreshImmersiveColorPolicyStateFunction = void(WINAPI*)();
+
+template <typename Function>
+Function ResolveUxThemeOrdinal(WORD ordinal) noexcept {
+    HMODULE uxTheme = GetModuleHandleW(L"uxtheme.dll");
+    return uxTheme == nullptr
+               ? nullptr
+               : reinterpret_cast<Function>(
+                     GetProcAddress(uxTheme, MAKEINTRESOURCEA(ordinal)));
+}
+
+void ConfigureNativeAppTheme(
+    const LocalMarkdownPreview::MarkdownThemePalette& palette) noexcept {
+    const auto refreshPolicy = ResolveUxThemeOrdinal<
+        RefreshImmersiveColorPolicyStateFunction>(104);
+    if (refreshPolicy != nullptr) {
+        refreshPolicy();
+    }
+
+    const auto setPreferredAppMode =
+        ResolveUxThemeOrdinal<SetPreferredAppModeFunction>(135);
+    if (setPreferredAppMode != nullptr) {
+        setPreferredAppMode(
+            palette.high_contrast
+                ? PreferredAppMode::Default
+                : (palette.dark ? PreferredAppMode::ForceDark
+                                : PreferredAppMode::ForceLight));
+    }
+}
 
 SystemVisualTheme ReadSystemVisualTheme() noexcept {
     SystemVisualTheme theme;
@@ -80,6 +121,63 @@ bool ThemePaletteEquals(const LocalMarkdownPreview::MarkdownThemePalette& left,
            left.table_header_background == right.table_header_background &&
            left.divider == right.divider && left.dark == right.dark &&
            left.high_contrast == right.high_contrast;
+}
+
+HRESULT ApplyNativeControlTheme(
+    HWND window,
+    const LocalMarkdownPreview::MarkdownThemePalette& palette) noexcept {
+    if (window == nullptr || !IsWindow(window)) {
+        return E_INVALIDARG;
+    }
+
+    const auto allowDarkModeForWindow =
+        ResolveUxThemeOrdinal<AllowDarkModeForWindowFunction>(133);
+    if (allowDarkModeForWindow != nullptr) {
+        allowDarkModeForWindow(
+            window,
+            palette.dark && !palette.high_contrast ? TRUE : FALSE);
+    }
+
+    HRESULT themeHr = S_OK;
+    if (palette.high_contrast) {
+        themeHr = SetWindowTheme(window, nullptr, nullptr);
+    } else {
+        themeHr = SetWindowTheme(
+            window,
+            palette.dark ? L"DarkMode_Explorer" : L"Explorer",
+            nullptr);
+    }
+    if (FAILED(themeHr)) {
+        return themeHr;
+    }
+
+    SetWindowPos(window,
+                 nullptr,
+                 0,
+                 0,
+                 0,
+                 0,
+                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE |
+                     SWP_FRAMECHANGED);
+    RedrawWindow(window,
+                 nullptr,
+                 nullptr,
+                 RDW_INVALIDATE | RDW_ERASE | RDW_FRAME | RDW_ALLCHILDREN);
+    return S_OK;
+}
+
+void UpdateHorizontalOverflowScrollbar(HWND window) noexcept {
+    if (window == nullptr || !IsWindow(window)) {
+        return;
+    }
+    SCROLLINFO scrollInfo{};
+    scrollInfo.cbSize = sizeof(scrollInfo);
+    scrollInfo.fMask = SIF_RANGE | SIF_PAGE;
+    const bool hasOverflow =
+        GetScrollInfo(window, SB_HORZ, &scrollInfo) != FALSE &&
+        scrollInfo.nMax >= scrollInfo.nMin &&
+        static_cast<UINT>(scrollInfo.nMax - scrollInfo.nMin + 1) > scrollInfo.nPage;
+    ShowScrollBar(window, SB_HORZ, hasOverflow ? TRUE : FALSE);
 }
 
 bool IsWholeParagraphRange(std::wstring_view text,
@@ -729,6 +827,7 @@ HRESULT LocalMarkdownPreviewHandler::CreatePreviewWindow(const std::wstring& tex
     if (FAILED(themeHr)) {
         return themeHr;
     }
+    ConfigureNativeAppTheme(_themePalette);
 
     const int width = _previewRect.right - _previewRect.left;
     const int height = _previewRect.bottom - _previewRect.top;
@@ -737,7 +836,7 @@ HRESULT LocalMarkdownPreviewHandler::CreatePreviewWindow(const std::wstring& tex
         MSFTEDIT_CLASS,
         L"",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_VSCROLL | WS_HSCROLL | ES_MULTILINE | ES_READONLY |
-            ES_AUTOVSCROLL | ES_AUTOHSCROLL | ES_NOOLEDRAGDROP,
+            ES_AUTOVSCROLL | ES_NOOLEDRAGDROP,
         _previewRect.left,
         _previewRect.top,
         width,
@@ -748,6 +847,13 @@ HRESULT LocalMarkdownPreviewHandler::CreatePreviewWindow(const std::wstring& tex
         nullptr);
     if (_previewWindow == nullptr) {
         return LastErrorAsHResult();
+    }
+    ShowScrollBar(_previewWindow, SB_HORZ, FALSE);
+    const HRESULT controlThemeHr = ApplyNativeControlTheme(_previewWindow, _themePalette);
+    if (FAILED(controlThemeHr)) {
+        DestroyWindow(_previewWindow);
+        _previewWindow = nullptr;
+        return controlThemeHr;
     }
     if (SetWindowSubclass(_previewWindow,
                           PreviewWindowSubclassProc,
@@ -780,6 +886,7 @@ HRESULT LocalMarkdownPreviewHandler::CreatePreviewWindow(const std::wstring& tex
                  EM_SETMARGINS,
                  EC_LEFTMARGIN | EC_RIGHTMARGIN,
                  MAKELPARAM(horizontalMargin, horizontalMargin));
+    SendMessageW(_previewWindow, EM_SETTARGETDEVICE, 0, 0);
     if (_fontSet && _fontHandle != nullptr) {
         SendMessageW(_previewWindow, WM_SETFONT, reinterpret_cast<WPARAM>(_fontHandle), TRUE);
     }
@@ -851,6 +958,7 @@ HRESULT LocalMarkdownPreviewHandler::MovePreviewWindow() noexcept {
             SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW)) {
         return LastErrorAsHResult();
     }
+    UpdateHorizontalOverflowScrollbar(_previewWindow);
     return S_OK;
 }
 
@@ -874,6 +982,11 @@ HRESULT LocalMarkdownPreviewHandler::RefreshVisualTheme() noexcept {
     }
     if (!changed) {
         return S_OK;
+    }
+    ConfigureNativeAppTheme(replacement);
+    const HRESULT controlThemeHr = ApplyNativeControlTheme(_previewWindow, replacement);
+    if (FAILED(controlThemeHr)) {
+        return controlThemeHr;
     }
 
     SendMessageW(_previewWindow,
@@ -1055,6 +1168,7 @@ HRESULT LocalMarkdownPreviewHandler::ApplyMarkdownFormatting() noexcept {
 
     CHARRANGE startSelection{0, 0};
     SendMessageW(_previewWindow, EM_EXSETSEL, 0, reinterpret_cast<LPARAM>(&startSelection));
+    UpdateHorizontalOverflowScrollbar(_previewWindow);
     return S_OK;
 }
 

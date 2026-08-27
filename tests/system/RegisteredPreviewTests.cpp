@@ -162,6 +162,18 @@ void RunRegisteredPreview(const std::wstring& markdownPath)
     HWND child = nullptr;
     RequireHr(oleWindow->GetWindow(&child), S_OK, "GetWindow failed");
     Require(child != nullptr && IsWindow(child), "preview child window is invalid");
+    const LONG_PTR childStyle = GetWindowLongPtrW(child, GWL_STYLE);
+    Require((childStyle & WS_VSCROLL) != 0, "registered preview has no vertical scrolling");
+    Require((childStyle & ES_AUTOHSCROLL) == 0,
+            "registered preview still uses automatic horizontal scrolling");
+    RECT narrowRect{0, 0, 280, 420};
+    RequireHr(preview->SetRect(&narrowRect), S_OK, "narrow SetRect failed");
+    const LRESULT narrowLineCount = SendMessageW(child, EM_GETLINECOUNT, 0, 0);
+    RECT wideRect{0, 0, 600, 420};
+    RequireHr(preview->SetRect(&wideRect), S_OK, "wide SetRect failed");
+    const LRESULT wideLineCount = SendMessageW(child, EM_GETLINECOUNT, 0, 0);
+    Require(wideLineCount < narrowLineCount,
+            "registered preview text did not reflow with pane width");
     const std::wstring text = ReadWindowText(child);
     Require(text.find(L"一级标题：中文 Markdown 预览") != std::wstring::npos,
             "Chinese Markdown content was not rendered");
