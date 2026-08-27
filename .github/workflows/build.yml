@@ -1,0 +1,60 @@
+name: Windows build and validation
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    runs-on: windows-2022
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build VS2022 v143 Release and run parser/COM tests
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & .\build.ps1 -Configuration Release
+          if (-not $?) { throw '根构建或原生烟雾测试失败' }
+
+      - name: Build and test MD4C parser spike
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & .\experiments\md4c_parser\build.ps1 -Configuration Release -RunTests
+          if (-not $?) { throw 'MD4C 样机测试失败' }
+
+      - name: Test registry behavior in a temporary HKCU root
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & .\tests\registry\Run-RegistryTests.ps1
+          if (-not $?) { throw '注册表临时根测试失败' }
+
+      - name: Check text encoding
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & .\tools\Test-TextEncoding.ps1
+          if (-not $?) { throw '文本编码检查失败' }
+
+      - name: Upload unsigned development artifacts
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: local-markdown-preview-release
+          path: |
+            build/Release/LocalMarkdownPreview.dll
+            build/Release/MarkdownDocumentTests.exe
+            build/Release/NativeSmokeTests.exe
+            build/Release/RegisteredPreviewTests.exe
+            experiments/md4c_parser/build/Release/md4c_parser_spike.exe
+          if-no-files-found: error

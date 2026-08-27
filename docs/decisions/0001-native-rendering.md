@@ -29,7 +29,7 @@
 
 ### 纯原生 C++ + RichEdit 外壳
 
-原生样机实现 `IInitializeWithStream`、`IObjectWithSite`、`IOleWindow` 和 `IPreviewHandler`，使用系统 RichEdit 显示只读文本。
+原生样机最初实现 `IInitializeWithStream`、`IObjectWithSite`、`IOleWindow` 和 `IPreviewHandler`，使用系统 RichEdit 显示只读文本。
 
 VS2022 `v143` Release x64 实测：
 
@@ -46,13 +46,13 @@ VS2022 `v143` Release x64 实测：
 
 1. 纯原生 C++20、Win32 和 COM。
 2. x64 DLL 由 Windows `prevhost.exe` 按需承载。
-3. 使用 `IInitializeWithStream` 读取只读流，不关闭低完整性隔离。
+3. 最终使用 `IInitializeWithFile`，但初始化阶段只保存路径，读取延后到 `DoPreview`；不关闭低完整性隔离。
 4. 使用系统 RichEdit 提供选择、复制、滚动、键盘和自动换行。
 5. Markdown 解析器只输出块、行内和文字节点，不生成 HTML。
 6. 格式内容由本项目生成安全的 RichEdit 文档数据；链接默认只显示，不在控件内导航。
-7. 只有从流中取得并验证可信本地文档路径时才加载相对图片；否则显示占位。
+7. 用文件入口取得文档根目录；图片必须通过最终文件句柄确认仍位于该目录内，随后从同一句柄读入内存解码，否则显示占位。
 
-原生解析器首选 MD4C：单个 C 源文件、MIT、无运行依赖，支持 CommonMark、表格、任务列表和删除线，并可通过回调直接消费节点。正式纳入前需完成固定版本、许可证、构建和恶意输入测试。
+解析器采用固定的 MD4C 0.5.3：单个 C 源文件、MIT、无运行依赖，支持 CommonMark、表格、任务列表和删除线，并通过回调直接消费节点。固定版本、许可证、两处 MSVC 兼容补丁和恶意输入测试均已完成记录。
 
 ## 后果
 
@@ -68,7 +68,11 @@ VS2022 `v143` Release x64 实测：
 - Markdown 节点到 RichEdit 格式的映射需要自行维护。
 - 表格和图片必须使用 RichEdit 支持的安全格式，不能复用网页布局。
 - 主题、DPI、取消、图片预算和宽表格需要专门测试。
-- 流不保证携带文件路径，本地相对图片必须允许安全降级为占位。
+- 使用文件入口意味着插件自行只读打开 Markdown；因此实现必须持续保持初始化不读取、5 MiB 上限、普通文件检查和明确错误处理。
+
+## 后续实测补充
+
+真实 Explorer 证明文件入口与专用 `Prevhost.exe` AppID 可以同时保持低完整性，宿主 RID 为 `0x1000`。中文路径、带空格的本地相对图片已经在 Explorer 中显示。最终 Release DLL 为 252,928 字节，真实宿主私有占用约 3.2 MiB，路线选择达到体积和内存目标。
 
 ## 参考
 

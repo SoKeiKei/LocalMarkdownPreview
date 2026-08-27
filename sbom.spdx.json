@@ -1,0 +1,60 @@
+{
+  "spdxVersion": "SPDX-2.3",
+  "dataLicense": "CC0-1.0",
+  "SPDXID": "SPDXRef-DOCUMENT",
+  "name": "LocalMarkdownPreview SBOM",
+  "documentNamespace": "https://spdx.org/spdxdocs/localmarkdownpreview-20260827",
+  "creationInfo": {
+    "created": "2026-08-27T00:00:00Z",
+    "creators": [
+      "Tool: manual"
+    ]
+  },
+  "documentDescribes": [
+    "SPDXRef-Package-LocalMarkdownPreview"
+  ],
+  "packages": [
+    {
+      "SPDXID": "SPDXRef-Package-LocalMarkdownPreview",
+      "name": "LocalMarkdownPreview",
+      "versionInfo": "development",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "Copyright (c) 2026 LocalMarkdownPreview contributors",
+      "comment": "纯 C++/Win32/COM Preview Handler；当前为开发验证阶段，尚无安装包或签名发布物。"
+    },
+    {
+      "SPDXID": "SPDXRef-Package-MD4C",
+      "name": "MD4C",
+      "versionInfo": "0.5.3",
+      "downloadLocation": "https://github.com/mity/md4c",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "Copyright © 2016-2024 Martin Mitáš",
+      "externalRefs": [
+        {
+          "referenceCategory": "OTHER",
+          "referenceType": "vcs",
+          "referenceLocator": "https://github.com/mity/md4c/tree/472c417005c2c71b8617de4f7b8d6b30411d78f4"
+        }
+      ],
+      "comment": "固定提交 472c417005c2c71b8617de4f7b8d6b30411d78f4；用于生产 Handler 的 MarkdownDocument 解析路径和 experiments/md4c_parser 独立样机，应用了 third_party/md4c/PATCHES.md 所述两处补丁。未填写尚未生成的哈希。"
+    }
+  ],
+  "relationships": [
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-LocalMarkdownPreview"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-LocalMarkdownPreview",
+      "relationshipType": "CONTAINS",
+      "relatedSpdxElement": "SPDXRef-Package-MD4C",
+      "comment": "仓库包含该固定依赖；它被生产 Handler 和独立样机静态编译使用。"
+    }
+  ]
+}
