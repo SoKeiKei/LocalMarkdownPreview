@@ -1,0 +1,5 @@
+LIBRARY native_preview
+
+EXPORTS
+    DllCanUnloadNow PRIVATE
+    DllGetClassObject PRIVATE
