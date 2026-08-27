@@ -1,0 +1,5 @@
+LIBRARY LocalMarkdownPreview
+
+EXPORTS
+    DllCanUnloadNow PRIVATE
+    DllGetClassObject PRIVATE

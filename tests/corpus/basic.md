@@ -40,6 +40,6 @@ line 2 <script>alert('never')</script>
 
 本地图片：
 
-![中文文件名](images/示例 图片.png)
+![中文文件名](<images/示例 图片.png>)
 
 最后一段用于检查滚动、选择和复制。
