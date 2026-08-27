@@ -1,0 +1,16 @@
+.vs/
+artifacts/
+packages/
+TestResults/
+*.user
+*.suo
+*.nupkg
+*.snupkg
+*.log
+*.pdb
+*.obj
+*.tlog
+*.ilk
+*.lastbuildstate
+bin/
+obj/
