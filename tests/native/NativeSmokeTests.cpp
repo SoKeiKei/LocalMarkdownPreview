@@ -1,10 +1,11 @@
 #include "LocalMarkdownPreview.h"
+#include "ThemePalette.h"
 
 #include <windows.h>
 #include <richole.h>
 
-#include <array>
 #include <cstdio>
+#include <cstdint>
 #include <cwchar>
 #include <cstring>
 #include <stdexcept>
@@ -32,6 +33,48 @@ void RequireHr(HRESULT actual, HRESULT expected, const char* message) {
                       static_cast<unsigned long>(actual), static_cast<unsigned long>(expected));
         throw std::runtime_error(detail);
     }
+}
+
+void VerifyThemePalettes() {
+    using LocalMarkdownPreview::BuildMarkdownThemePalette;
+    using LocalMarkdownPreview::HasReadableThemeContrast;
+    using LocalMarkdownPreview::IsDarkThemeColor;
+
+    const auto light = BuildMarkdownThemePalette(
+        RGB(250, 250, 250), true, RGB(30, 30, 30), true,
+        false, false, RGB(0, 95, 184));
+    Require(!light.dark && !IsDarkThemeColor(light.background),
+            "light palette selected a dark background");
+    Require(HasReadableThemeContrast(light.text, light.background),
+            "light palette body text has insufficient contrast");
+    Require(HasReadableThemeContrast(light.heading, light.background),
+            "light palette heading has insufficient contrast");
+    Require(light.code_background != light.background,
+            "light palette code surface is invisible");
+
+    const auto dark = BuildMarkdownThemePalette(
+        RGB(250, 250, 250), true, RGB(30, 30, 30), true,
+        true, false, RGB(102, 179, 255));
+    Require(dark.dark && IsDarkThemeColor(dark.background),
+            "dark palette accepted a stale light background");
+    Require(HasReadableThemeContrast(dark.text, dark.background),
+            "dark palette body text has insufficient contrast");
+    Require(HasReadableThemeContrast(dark.link, dark.background),
+            "dark palette link has insufficient contrast");
+    Require(dark.code_background != dark.background,
+            "dark palette code surface is invisible");
+
+    const COLORREF contrastBackground = RGB(0, 0, 0);
+    const COLORREF contrastText = RGB(255, 255, 0);
+    const COLORREF contrastLink = RGB(0, 255, 255);
+    const auto highContrast = BuildMarkdownThemePalette(
+        contrastBackground, true, contrastText, true,
+        true, true, contrastLink);
+    Require(highContrast.high_contrast &&
+                highContrast.background == contrastBackground &&
+                highContrast.text == contrastText &&
+                highContrast.link == contrastLink,
+            "high-contrast system colors were not preserved");
 }
 
 class MemoryStream final : public IStream {
@@ -314,21 +357,16 @@ public:
                 "temporary image directory creation failed");
         _directory = candidate;
         _documentPath = _directory + L"\\preview.md";
-        _imagePath = _directory + L"\\preview.png";
+        _imagePath = _directory + L"\\preview.bmp";
 
-        static constexpr std::array<BYTE, 68> png{
-            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
-            0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
-            0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
-            0x08, 0x04, 0x00, 0x00, 0x00, 0xB5, 0x1C, 0x0C, 0x02,
-            0x00, 0x00, 0x00, 0x0B, 0x49, 0x44, 0x41, 0x54,
-            0x78, 0xDA, 0x63, 0x64, 0xF8, 0x0F, 0x00, 0x01, 0x05, 0x01, 0x01,
-            0x27, 0x18, 0xE3, 0x66, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44,
-            0xAE, 0x42, 0x60, 0x82};
-        WriteFile(_imagePath, png.data(), png.size());
+        const std::vector<BYTE> bitmap = CreateBitmapFixture(320, 120);
+        WriteFile(_imagePath, bitmap.data(), bitmap.size());
         static constexpr char markdown[] =
             "# \xe6\xa0\x87\xe9\xa2\x98\n\n\xe4\xbd\xa0\xe5\xa5\xbd\n\n"
-            "![local image](preview.png)\n";
+            "> quote\n\n`inline` and [link](https://example.com)\n\n"
+            "```txt\ncode block\n```\n\n"
+            "| A | B |\n|---|---|\n| 1 | 2 |\n\n"
+            "![local image](preview.bmp)\n";
         WriteFile(_documentPath,
                   reinterpret_cast<const BYTE*>(markdown),
                   sizeof(markdown) - 1);
@@ -359,6 +397,48 @@ public:
     }
 
 private:
+    static void WriteLittleEndian16(std::vector<BYTE>* bytes,
+                                    std::size_t offset,
+                                    std::uint16_t value) {
+        (*bytes)[offset] = static_cast<BYTE>(value & 0xFFu);
+        (*bytes)[offset + 1] = static_cast<BYTE>((value >> 8) & 0xFFu);
+    }
+
+    static void WriteLittleEndian32(std::vector<BYTE>* bytes,
+                                    std::size_t offset,
+                                    std::uint32_t value) {
+        for (unsigned index = 0; index < 4; ++index) {
+            (*bytes)[offset + index] =
+                static_cast<BYTE>((value >> (index * 8u)) & 0xFFu);
+        }
+    }
+
+    static std::vector<BYTE> CreateBitmapFixture(std::uint32_t width,
+                                                  std::uint32_t height) {
+        const std::uint32_t stride = (width * 3u + 3u) & ~3u;
+        const std::uint32_t pixelBytes = stride * height;
+        std::vector<BYTE> bytes(54u + pixelBytes, 0);
+        bytes[0] = 'B';
+        bytes[1] = 'M';
+        WriteLittleEndian32(&bytes, 2, static_cast<std::uint32_t>(bytes.size()));
+        WriteLittleEndian32(&bytes, 10, 54);
+        WriteLittleEndian32(&bytes, 14, 40);
+        WriteLittleEndian32(&bytes, 18, width);
+        WriteLittleEndian32(&bytes, 22, height);
+        WriteLittleEndian16(&bytes, 26, 1);
+        WriteLittleEndian16(&bytes, 28, 24);
+        WriteLittleEndian32(&bytes, 34, pixelBytes);
+        for (std::uint32_t row = 0; row < height; ++row) {
+            BYTE* pixels = bytes.data() + 54u + row * stride;
+            for (std::uint32_t column = 0; column < width; ++column) {
+                pixels[column * 3u] = 224;
+                pixels[column * 3u + 1] = 132;
+                pixels[column * 3u + 2] = 36;
+            }
+        }
+        return bytes;
+    }
+
     static void WriteFile(const std::wstring& path, const BYTE* bytes, std::size_t size) {
         HANDLE file = ::CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
                                     FILE_ATTRIBUTE_NORMAL, nullptr);
@@ -394,6 +474,7 @@ void QueryHandlerInterfaces(IUnknown* unknown,
 }
 
 void RunSmoke(const std::wstring& dllPath) {
+    VerifyThemePalettes();
     HMODULE module = LoadLibraryW(dllPath.c_str());
     Require(module != nullptr, "LoadLibraryW failed");
 
@@ -488,10 +569,62 @@ void RunSmoke(const std::wstring& dllPath) {
     SendMessageW(previewWindow, EM_EXSETSEL, 0, reinterpret_cast<LPARAM>(&headingRange));
     CHARFORMAT2W headingFormat{};
     headingFormat.cbSize = sizeof(headingFormat);
-    headingFormat.dwMask = CFM_BOLD;
+    headingFormat.dwMask = CFM_BOLD | CFM_COLOR | CFM_SIZE;
     SendMessageW(previewWindow, EM_GETCHARFORMAT, TRUE, reinterpret_cast<LPARAM>(&headingFormat));
     Require((headingFormat.dwEffects & CFE_BOLD) != 0,
             "Markdown heading was not formatted as bold");
+    PARAFORMAT2 headingParagraph{};
+    headingParagraph.cbSize = sizeof(headingParagraph);
+    SendMessageW(previewWindow,
+                 EM_GETPARAFORMAT,
+                 0,
+                 reinterpret_cast<LPARAM>(&headingParagraph));
+    Require(headingParagraph.dySpaceAfter > 0,
+            "Markdown heading has no visual separation from body text");
+    const COLORREF temporaryBackground = RGB(1, 2, 3);
+    const COLORREF previewBackground = static_cast<COLORREF>(SendMessageW(
+        previewWindow, EM_SETBKGNDCOLOR, FALSE, temporaryBackground));
+    SendMessageW(previewWindow,
+                 EM_SETBKGNDCOLOR,
+                 FALSE,
+                 static_cast<LPARAM>(previewBackground));
+    Require(LocalMarkdownPreview::HasReadableThemeContrast(
+                headingFormat.crTextColor, previewBackground),
+            "Markdown heading color has insufficient theme contrast");
+    const std::size_t codeStart = previewText.find(L"code block");
+    Require(codeStart != std::wstring::npos, "code block text is missing");
+    CHARRANGE codeRange{static_cast<LONG>(codeStart),
+                        static_cast<LONG>(codeStart + 10)};
+    SendMessageW(previewWindow, EM_EXSETSEL, 0, reinterpret_cast<LPARAM>(&codeRange));
+    CHARFORMAT2W codeFormat{};
+    codeFormat.cbSize = sizeof(codeFormat);
+    codeFormat.dwMask = CFM_BACKCOLOR | CFM_COLOR | CFM_FACE;
+    SendMessageW(previewWindow,
+                 EM_GETCHARFORMAT,
+                 TRUE,
+                 reinterpret_cast<LPARAM>(&codeFormat));
+    Require(codeFormat.crBackColor != previewBackground,
+            "code block background does not separate from the preview surface");
+    Require(LocalMarkdownPreview::HasReadableThemeContrast(
+                codeFormat.crTextColor, codeFormat.crBackColor),
+            "code block text has insufficient theme contrast");
+    PARAFORMAT2 codeParagraph{};
+    codeParagraph.cbSize = sizeof(codeParagraph);
+    SendMessageW(previewWindow,
+                 EM_GETPARAFORMAT,
+                 0,
+                 reinterpret_cast<LPARAM>(&codeParagraph));
+    Require(codeParagraph.dxStartIndent > 0,
+            "code block paragraph has no left inset");
+    Require(codeParagraph.dxRightIndent > 0,
+            "code block paragraph has no right inset");
+    SendMessageW(previewWindow, WM_THEMECHANGED, 0, 0);
+    SendMessageW(previewWindow,
+                 WM_SETTINGCHANGE,
+                 0,
+                 reinterpret_cast<LPARAM>(L"ImmersiveColorSet"));
+    Require(IsWindow(previewWindow) != FALSE,
+            "preview window did not survive a live theme refresh");
     const LRESULT options = SendMessageW(previewWindow, EM_GETOPTIONS, 0, 0);
     Require((options & ECO_READONLY) != 0, "RichEdit is not read-only");
     Require(previewText.find(L"[图片: preview.png]") == std::wstring::npos,
@@ -503,6 +636,13 @@ void RunSmoke(const std::wstring& dllPath) {
             "local image object collection is unavailable");
     Require(richEditOle->GetObjectCount() == 1,
             "safe local image was not inserted as a visible object");
+    REOBJECT imageObject{};
+    imageObject.cbStruct = sizeof(imageObject);
+    RequireHr(richEditOle->GetObject(0, &imageObject, REO_GETOBJ_NO_INTERFACES),
+              S_OK,
+              "safe local image object metadata is unavailable");
+    Require(imageObject.sizel.cx >= 8400 && imageObject.sizel.cy >= 3100,
+            "safe local image was permanently shrunk by transient pane layout");
     richEditOle->Release();
 
     RequireHr(preview->SetFocus(), S_OK, "SetFocus failed");

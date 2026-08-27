@@ -37,6 +37,9 @@
     <ClInclude Include="SafeImageLoader.h">
       <Filter>头文件</Filter>
     </ClInclude>
+    <ClInclude Include="ThemePalette.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
     <ClInclude Include="..\..\third_party\md4c\md4c.h">
       <Filter>头文件</Filter>
     </ClInclude>

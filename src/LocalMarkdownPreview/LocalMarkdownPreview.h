@@ -16,6 +16,7 @@
 #include <vector>
 
 #include "MarkdownDocument.h"
+#include "ThemePalette.h"
 
 extern HINSTANCE g_module_instance;
 
@@ -76,6 +77,7 @@ private:
         LocalMarkdownPreview::MarkdownDocumentResult document) noexcept;
     HRESULT DestroyPreviewWindow() noexcept;
     HRESULT MovePreviewWindow() noexcept;
+    HRESULT RefreshVisualTheme() noexcept;
     HRESULT ApplyTextColor() noexcept;
     HRESULT ApplyMarkdownFormatting() noexcept;
     HRESULT InsertLocalImages() noexcept;
@@ -88,6 +90,12 @@ private:
                                       std::wstring* text) noexcept;
     static HRESULT LastErrorAsHResult() noexcept;
     static bool IsRectUsable(const RECT& rect) noexcept;
+    static LRESULT CALLBACK PreviewWindowSubclassProc(HWND window,
+                                                      UINT message,
+                                                      WPARAM wParam,
+                                                      LPARAM lParam,
+                                                      UINT_PTR subclassId,
+                                                      DWORD_PTR referenceData);
 
     LONG _referenceCount;
     HWND _parentWindow;
@@ -97,8 +105,13 @@ private:
     IUnknown* _site;
     DWORD _streamMode;
     bool _initialized;
+    COLORREF _hostBackgroundColor;
+    COLORREF _hostTextColor;
+    bool _hostBackgroundColorSet;
+    bool _hostTextColorSet;
     COLORREF _backgroundColor;
     COLORREF _textColor;
+    LocalMarkdownPreview::MarkdownThemePalette _themePalette;
     LOGFONTW _font;
     bool _fontSet;
     HFONT _fontHandle;

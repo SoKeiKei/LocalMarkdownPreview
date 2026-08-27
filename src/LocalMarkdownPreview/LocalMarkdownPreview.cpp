@@ -1,6 +1,7 @@
 #include "LocalMarkdownPreview.h"
 #include "SafeImageLoader.h"
 
+#include <commctrl.h>
 #include <shlwapi.h>
 #include <shlobj_core.h>
 #include <richole.h>
@@ -24,6 +25,78 @@ constexpr wchar_t kEncodingPreviewError[] = L"文件编码无法识别。";
 constexpr wchar_t kMarkdownLimitPreviewError[] = L"文档结构过于复杂，已停止预览。";
 constexpr wchar_t kMarkdownTimeoutPreviewError[] = L"文档解析超时，已停止预览。";
 constexpr wchar_t kMarkdownCancelledPreviewError[] = L"预览已取消。";
+constexpr UINT_PTR kThemeRefreshTimerId = 0x4D445448u;
+constexpr UINT kThemeRefreshIntervalMilliseconds = 1500u;
+
+struct SystemVisualTheme {
+    bool dark = false;
+    bool highContrast = false;
+    COLORREF background = RGB(255, 255, 255);
+    COLORREF text = RGB(31, 31, 31);
+    COLORREF accent = RGB(0, 95, 184);
+};
+
+SystemVisualTheme ReadSystemVisualTheme() noexcept {
+    SystemVisualTheme theme;
+    HIGHCONTRASTW highContrast{};
+    highContrast.cbSize = sizeof(highContrast);
+    if (SystemParametersInfoW(
+            SPI_GETHIGHCONTRAST, sizeof(highContrast), &highContrast, 0) != FALSE &&
+        (highContrast.dwFlags & HCF_HIGHCONTRASTON) != 0) {
+        theme.highContrast = true;
+        theme.background = GetSysColor(COLOR_WINDOW);
+        theme.text = GetSysColor(COLOR_WINDOWTEXT);
+        theme.accent = GetSysColor(COLOR_HOTLIGHT);
+        theme.dark = LocalMarkdownPreview::IsDarkThemeColor(theme.background);
+        return theme;
+    }
+
+    DWORD appsUseLightTheme = 1;
+    DWORD valueType = 0;
+    DWORD valueBytes = sizeof(appsUseLightTheme);
+    const LSTATUS status = SHGetValueW(
+        HKEY_CURRENT_USER,
+        L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
+        L"AppsUseLightTheme",
+        &valueType,
+        &appsUseLightTheme,
+        &valueBytes);
+    theme.dark = status == ERROR_SUCCESS && valueType == REG_DWORD && valueBytes == sizeof(DWORD)
+                     ? appsUseLightTheme == 0
+                     : LocalMarkdownPreview::IsDarkThemeColor(GetSysColor(COLOR_WINDOW));
+    theme.background = theme.dark ? RGB(32, 32, 32) : RGB(255, 255, 255);
+    theme.text = theme.dark ? RGB(242, 242, 242) : RGB(31, 31, 31);
+    theme.accent = theme.dark ? RGB(102, 179, 255) : RGB(0, 95, 184);
+    return theme;
+}
+
+bool ThemePaletteEquals(const LocalMarkdownPreview::MarkdownThemePalette& left,
+                        const LocalMarkdownPreview::MarkdownThemePalette& right) noexcept {
+    return left.background == right.background && left.text == right.text &&
+           left.heading == right.heading && left.link == right.link &&
+           left.secondary_text == right.secondary_text &&
+           left.code_background == right.code_background &&
+           left.code_text == right.code_text &&
+           left.table_header_background == right.table_header_background &&
+           left.divider == right.divider && left.dark == right.dark &&
+           left.high_contrast == right.high_contrast;
+}
+
+bool IsWholeParagraphRange(std::wstring_view text,
+                           std::size_t start,
+                           std::size_t length) noexcept {
+    if (start > text.size() || length > text.size() - start) {
+        return false;
+    }
+    const std::size_t end = start + length;
+    const bool beginsAtLine =
+        start == 0 || text[start - 1] == L'\n' || text[start - 1] == L'\r';
+    const bool endsAtLine =
+        end == text.size() ||
+        (end > start && (text[end - 1] == L'\n' || text[end - 1] == L'\r')) ||
+        text[end] == L'\n' || text[end] == L'\r';
+    return beginsAtLine && endsAtLine;
+}
 
 bool IsPreviewCancelled(void* context) noexcept {
     if (context == nullptr) {
@@ -287,8 +360,13 @@ LocalMarkdownPreviewHandler::LocalMarkdownPreviewHandler() noexcept
       _site(nullptr),
       _streamMode(0),
       _initialized(false),
+      _hostBackgroundColor(GetSysColor(COLOR_WINDOW)),
+      _hostTextColor(GetSysColor(COLOR_WINDOWTEXT)),
+      _hostBackgroundColorSet(false),
+      _hostTextColorSet(false),
       _backgroundColor(GetSysColor(COLOR_WINDOW)),
       _textColor(GetSysColor(COLOR_WINDOWTEXT)),
+      _themePalette(),
       _font{},
       _fontSet(false),
       _fontHandle(nullptr),
@@ -585,12 +663,9 @@ STDMETHODIMP LocalMarkdownPreviewHandler::Unload() {
 }
 
 STDMETHODIMP LocalMarkdownPreviewHandler::SetBackgroundColor(COLORREF color) {
-    _backgroundColor = color;
-    if (_previewWindow != nullptr && IsWindow(_previewWindow)) {
-        SendMessageW(_previewWindow, EM_SETBKGNDCOLOR, FALSE, static_cast<LPARAM>(color));
-        return ApplyMarkdownFormatting();
-    }
-    return S_OK;
+    _hostBackgroundColor = color;
+    _hostBackgroundColorSet = true;
+    return RefreshVisualTheme();
 }
 
 STDMETHODIMP LocalMarkdownPreviewHandler::SetFont(const LOGFONTW* font) {
@@ -619,12 +694,9 @@ STDMETHODIMP LocalMarkdownPreviewHandler::SetFont(const LOGFONTW* font) {
 }
 
 STDMETHODIMP LocalMarkdownPreviewHandler::SetTextColor(COLORREF color) {
-    _textColor = color;
-    if (_previewWindow == nullptr || !IsWindow(_previewWindow)) {
-        return S_OK;
-    }
-    const HRESULT colorHr = ApplyTextColor();
-    return FAILED(colorHr) ? colorHr : ApplyMarkdownFormatting();
+    _hostTextColor = color;
+    _hostTextColorSet = true;
+    return RefreshVisualTheme();
 }
 
 HRESULT LocalMarkdownPreviewHandler::CreateMarkdownPreviewWindow(
@@ -653,10 +725,15 @@ HRESULT LocalMarkdownPreviewHandler::CreatePreviewWindow(const std::wstring& tex
         }
     }
 
+    const HRESULT themeHr = RefreshVisualTheme();
+    if (FAILED(themeHr)) {
+        return themeHr;
+    }
+
     const int width = _previewRect.right - _previewRect.left;
     const int height = _previewRect.bottom - _previewRect.top;
     _previewWindow = CreateWindowExW(
-        WS_EX_CLIENTEDGE,
+        0,
         MSFTEDIT_CLASS,
         L"",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_VSCROLL | WS_HSCROLL | ES_MULTILINE | ES_READONLY |
@@ -672,6 +749,19 @@ HRESULT LocalMarkdownPreviewHandler::CreatePreviewWindow(const std::wstring& tex
     if (_previewWindow == nullptr) {
         return LastErrorAsHResult();
     }
+    if (SetWindowSubclass(_previewWindow,
+                          PreviewWindowSubclassProc,
+                          kThemeRefreshTimerId,
+                          reinterpret_cast<DWORD_PTR>(this)) == FALSE) {
+        const HRESULT hr = LastErrorAsHResult();
+        DestroyWindow(_previewWindow);
+        _previewWindow = nullptr;
+        return hr;
+    }
+    SetTimer(_previewWindow,
+             kThemeRefreshTimerId,
+             kThemeRefreshIntervalMilliseconds,
+             nullptr);
 
     SendMessageW(_previewWindow, EM_EXLIMITTEXT, 0, static_cast<LPARAM>(kMaxPreviewBytes));
     if (SendMessageW(_previewWindow, EM_SETREADONLY, TRUE, 0) == FALSE) {
@@ -682,6 +772,14 @@ HRESULT LocalMarkdownPreviewHandler::CreatePreviewWindow(const std::wstring& tex
     }
 
     SendMessageW(_previewWindow, EM_SETBKGNDCOLOR, FALSE, static_cast<LPARAM>(_backgroundColor));
+    const UINT dpi = std::max<UINT>(GetDpiForWindow(_previewWindow), 96u);
+    const WORD horizontalMargin = static_cast<WORD>(std::min<UINT>(
+        MulDiv(16, static_cast<int>(dpi), 96),
+        static_cast<int>(std::numeric_limits<WORD>::max())));
+    SendMessageW(_previewWindow,
+                 EM_SETMARGINS,
+                 EC_LEFTMARGIN | EC_RIGHTMARGIN,
+                 MAKELPARAM(horizontalMargin, horizontalMargin));
     if (_fontSet && _fontHandle != nullptr) {
         SendMessageW(_previewWindow, WM_SETFONT, reinterpret_cast<WPARAM>(_fontHandle), TRUE);
     }
@@ -722,6 +820,8 @@ HRESULT LocalMarkdownPreviewHandler::DestroyPreviewWindow() noexcept {
     }
 
     const HWND window = _previewWindow;
+    KillTimer(window, kThemeRefreshTimerId);
+    RemoveWindowSubclass(window, PreviewWindowSubclassProc, kThemeRefreshTimerId);
     SetLastError(ERROR_SUCCESS);
     if (!DestroyWindow(window) && IsWindow(window)) {
         return LastErrorAsHResult();
@@ -754,6 +854,66 @@ HRESULT LocalMarkdownPreviewHandler::MovePreviewWindow() noexcept {
     return S_OK;
 }
 
+HRESULT LocalMarkdownPreviewHandler::RefreshVisualTheme() noexcept {
+    const SystemVisualTheme systemTheme = ReadSystemVisualTheme();
+    const auto replacement = LocalMarkdownPreview::BuildMarkdownThemePalette(
+        systemTheme.highContrast ? systemTheme.background : _hostBackgroundColor,
+        systemTheme.highContrast || _hostBackgroundColorSet,
+        systemTheme.highContrast ? systemTheme.text : _hostTextColor,
+        systemTheme.highContrast || _hostTextColorSet,
+        systemTheme.dark,
+        systemTheme.highContrast,
+        systemTheme.accent);
+    const bool changed = !ThemePaletteEquals(_themePalette, replacement);
+    _themePalette = replacement;
+    _backgroundColor = replacement.background;
+    _textColor = replacement.text;
+
+    if (_previewWindow == nullptr || !IsWindow(_previewWindow)) {
+        return S_OK;
+    }
+    if (!changed) {
+        return S_OK;
+    }
+
+    SendMessageW(_previewWindow,
+                 EM_SETBKGNDCOLOR,
+                 FALSE,
+                 static_cast<LPARAM>(_backgroundColor));
+    const HRESULT textHr = ApplyTextColor();
+    if (FAILED(textHr)) {
+        return textHr;
+    }
+    const HRESULT formattingHr = ApplyMarkdownFormatting();
+    if (SUCCEEDED(formattingHr)) {
+        InvalidateRect(_previewWindow, nullptr, TRUE);
+    }
+    return formattingHr;
+}
+
+LRESULT CALLBACK LocalMarkdownPreviewHandler::PreviewWindowSubclassProc(
+    HWND window,
+    UINT message,
+    WPARAM wParam,
+    LPARAM lParam,
+    UINT_PTR subclassId,
+    DWORD_PTR referenceData) {
+    auto* handler = reinterpret_cast<LocalMarkdownPreviewHandler*>(referenceData);
+    if (message == WM_NCDESTROY) {
+        RemoveWindowSubclass(window, PreviewWindowSubclassProc, subclassId);
+        return DefSubclassProc(window, message, wParam, lParam);
+    }
+
+    const LRESULT result = DefSubclassProc(window, message, wParam, lParam);
+    if (handler != nullptr &&
+        (message == WM_THEMECHANGED || message == WM_SYSCOLORCHANGE ||
+         message == WM_SETTINGCHANGE ||
+         (message == WM_TIMER && wParam == kThemeRefreshTimerId))) {
+        handler->RefreshVisualTheme();
+    }
+    return result;
+}
+
 HRESULT LocalMarkdownPreviewHandler::ApplyTextColor() noexcept {
     if (_previewWindow == nullptr || !IsWindow(_previewWindow)) {
         return E_FAIL;
@@ -777,13 +937,18 @@ HRESULT LocalMarkdownPreviewHandler::ApplyMarkdownFormatting() noexcept {
         return E_FAIL;
     }
 
-    const int red = GetRValue(_backgroundColor);
-    const int green = GetGValue(_backgroundColor);
-    const int blue = GetBValue(_backgroundColor);
-    const bool dark = (red * 299 + green * 587 + blue * 114) < 128000;
-    const COLORREF linkColor = dark ? RGB(102, 179, 255) : RGB(0, 102, 204);
-    const COLORREF quoteColor = dark ? RGB(176, 190, 204) : RGB(80, 96, 112);
-    const COLORREF codeBackground = dark ? RGB(45, 48, 52) : RGB(242, 244, 247);
+    CHARRANGE allText{0, -1};
+    SendMessageW(_previewWindow, EM_EXSETSEL, 0, reinterpret_cast<LPARAM>(&allText));
+    PARAFORMAT2 bodyParagraph{};
+    bodyParagraph.cbSize = sizeof(bodyParagraph);
+    bodyParagraph.dwMask = PFM_SPACEAFTER;
+    bodyParagraph.dySpaceAfter = 70;
+    if (SendMessageW(_previewWindow,
+                     EM_SETPARAFORMAT,
+                     0,
+                     reinterpret_cast<LPARAM>(&bodyParagraph)) == FALSE) {
+        return E_FAIL;
+    }
 
     for (const auto& range : _document.formats) {
         if (range.length == 0 || range.start > static_cast<std::size_t>(LONG_MAX) ||
@@ -798,6 +963,9 @@ HRESULT LocalMarkdownPreviewHandler::ApplyMarkdownFormatting() noexcept {
 
         CHARFORMAT2W format{};
         format.cbSize = sizeof(format);
+        PARAFORMAT2 paragraph{};
+        paragraph.cbSize = sizeof(paragraph);
+        bool applyParagraph = false;
         using LocalMarkdownPreview::MarkdownFormatKind;
         switch (range.kind) {
         case MarkdownFormatKind::Heading: {
@@ -805,15 +973,26 @@ HRESULT LocalMarkdownPreviewHandler::ApplyMarkdownFormatting() noexcept {
             const unsigned index = range.level >= 1 && range.level <= 6
                                        ? range.level - 1
                                        : 5;
-            format.dwMask = CFM_BOLD | CFM_SIZE;
+            format.dwMask = CFM_BOLD | CFM_SIZE | CFM_COLOR;
             format.dwEffects = CFE_BOLD;
             format.yHeight = headingTwips[index];
+            format.crTextColor = _themePalette.heading;
+            paragraph.dwMask = PFM_SPACEBEFORE | PFM_SPACEAFTER | PFM_KEEP;
+            paragraph.dySpaceBefore = range.start == 0 ? 0 : (index <= 1 ? 210 : 140);
+            paragraph.dySpaceAfter = index <= 1 ? 100 : 75;
+            paragraph.wEffects = PFE_KEEP;
+            applyParagraph = true;
             break;
         }
         case MarkdownFormatKind::Bold:
-        case MarkdownFormatKind::TableHeader:
             format.dwMask = CFM_BOLD;
             format.dwEffects = CFE_BOLD;
+            break;
+        case MarkdownFormatKind::TableHeader:
+            format.dwMask = CFM_BOLD | CFM_BACKCOLOR | CFM_COLOR;
+            format.dwEffects = CFE_BOLD;
+            format.crBackColor = _themePalette.table_header_background;
+            format.crTextColor = _themePalette.text;
             break;
         case MarkdownFormatKind::Italic:
             format.dwMask = CFM_ITALIC;
@@ -824,19 +1003,38 @@ HRESULT LocalMarkdownPreviewHandler::ApplyMarkdownFormatting() noexcept {
             format.dwEffects = CFE_STRIKEOUT;
             break;
         case MarkdownFormatKind::Code:
-            format.dwMask = CFM_FACE | CFM_BACKCOLOR;
-            format.crBackColor = codeBackground;
-            wcscpy_s(format.szFaceName, _countof(format.szFaceName), L"Cascadia Mono");
+            format.dwMask = CFM_FACE | CFM_BACKCOLOR | CFM_COLOR | CFM_SIZE;
+            format.crBackColor = _themePalette.code_background;
+            format.crTextColor = _themePalette.code_text;
+            format.yHeight = 200;
+            wcscpy_s(format.szFaceName, _countof(format.szFaceName), L"Consolas");
+            if (IsWholeParagraphRange(
+                    _document.visible_text, range.start, range.length)) {
+                paragraph.dwMask = PFM_STARTINDENT | PFM_RIGHTINDENT |
+                                   PFM_SPACEBEFORE | PFM_SPACEAFTER;
+                paragraph.dxStartIndent = 180;
+                paragraph.dxRightIndent = 180;
+                paragraph.dySpaceBefore = 90;
+                paragraph.dySpaceAfter = 110;
+                applyParagraph = true;
+            }
             break;
         case MarkdownFormatKind::Link:
             format.dwMask = CFM_COLOR | CFM_UNDERLINE;
             format.dwEffects = CFE_UNDERLINE;
-            format.crTextColor = linkColor;
+            format.crTextColor = _themePalette.link;
             break;
         case MarkdownFormatKind::Quote:
             format.dwMask = CFM_COLOR | CFM_ITALIC;
             format.dwEffects = CFE_ITALIC;
-            format.crTextColor = quoteColor;
+            format.crTextColor = _themePalette.secondary_text;
+            paragraph.dwMask = PFM_STARTINDENT | PFM_RIGHTINDENT |
+                               PFM_SPACEBEFORE | PFM_SPACEAFTER;
+            paragraph.dxStartIndent = 240;
+            paragraph.dxRightIndent = 120;
+            paragraph.dySpaceBefore = 70;
+            paragraph.dySpaceAfter = 85;
+            applyParagraph = true;
             break;
         }
 
@@ -844,6 +1042,13 @@ HRESULT LocalMarkdownPreviewHandler::ApplyMarkdownFormatting() noexcept {
                          EM_SETCHARFORMAT,
                          static_cast<WPARAM>(SCF_SELECTION),
                          reinterpret_cast<LPARAM>(&format)) == FALSE) {
+            return E_FAIL;
+        }
+        if (applyParagraph &&
+            SendMessageW(_previewWindow,
+                         EM_SETPARAFORMAT,
+                         0,
+                         reinterpret_cast<LPARAM>(&paragraph)) == FALSE) {
             return E_FAIL;
         }
     }
@@ -891,7 +1096,10 @@ HRESULT LocalMarkdownPreviewHandler::InsertLocalImages() noexcept try {
         GetClientRect(_previewWindow, &client);
         const UINT dpi = std::max<UINT>(GetDpiForWindow(_previewWindow), 96u);
         const std::uint32_t availablePixels = static_cast<std::uint32_t>(
-            std::max<LONG>(64, client.right - client.left - 24));
+            // Explorer can call DoPreview while the pane still has a narrow
+            // transient layout. Avoid permanently shrinking an image to that
+            // temporary width; the control already provides horizontal scroll.
+            std::max<LONG>(480, client.right - client.left - 24));
         const std::uint32_t displayWidth = std::min(image.width, availablePixels);
         const std::uint32_t displayHeight = std::max<std::uint32_t>(
             1,

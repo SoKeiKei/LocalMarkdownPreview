@@ -21,6 +21,7 @@
 - Markdown 格式、编码、预算和 2,000 组确定性模糊输入测试。
 - 本地图片路径、签名、尺寸、预算和损坏文件测试。
 - COM 工厂、文件读取时机、只读窗口、图片插入、外观、焦点和卸载生命周期测试。
+- 亮色、暗色、高对比调色板、文字对比度、标题留白、代码块内缩、主题刷新消息和 320×120 图片对象尺寸测试。
 
 本机最终结果：13,580 项文档断言通过；42 项图片断言通过，另有 1 项符号链接用例因当前账户没有创建链接权限而跳过；Release 和 Debug 窗口测试均通过。
 
@@ -68,5 +69,4 @@ dist\SHA256SUMS.txt
 
 ## 依赖与导出核对
 
-本机最终 DLL 只依赖 Windows 系统组件：`USER32.dll`、`ole32.dll`、`SHLWAPI.dll`、`KERNEL32.dll`、`GDI32.dll` 和 `SHELL32.dll`。对外导出仅为 `DllCanUnloadNow` 与 `DllGetClassObject`。
-
+本机最终 DLL 只依赖 Windows 系统组件：`USER32.dll`、`ole32.dll`、`SHLWAPI.dll`、`COMCTL32.dll`、`KERNEL32.dll`、`GDI32.dll` 和 `SHELL32.dll`。对外导出仅为 `DllCanUnloadNow` 与 `DllGetClassObject`。
