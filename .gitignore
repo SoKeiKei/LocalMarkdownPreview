@@ -15,3 +15,13 @@ TestResults/
 bin/
 obj/
 build/
+
+# release outputs / local artifacts
+dist/
+artifacts/
+*.exe
+*.dll
+*.iobj
+*.ipdb
+.vs/
+experiments/**/build/

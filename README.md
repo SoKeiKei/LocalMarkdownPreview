@@ -24,7 +24,13 @@ LocalMarkdownPreview 是一个轻量、离线的 Windows 资源管理器 Markdow
 
 未覆盖项目：Windows 10 实机、ARM64、干净虚拟机、代码签名和连续两小时长测。详见 [兼容性矩阵](docs/compatibility-matrix.md) 和 [已知限制](docs/known-issues.md)。
 
+## 安装
+
+从 [Releases](https://github.com/SoKeiKei/LocalMarkdownPreview/releases) 下载 `LocalMarkdownPreview-*-x64.exe`，运行安装后在资源管理器中打开「预览窗格」（Alt+P），选中 `.md` 文件即可。卸载请在「设置 → 应用」中移除。
+
 ## 构建
+
+打包需要 [Inno Setup 6](https://jrsoftware.org/isinfo.php)，`ISCC.exe` 需在 PATH 中，或设置 ``。
 
 需要 Windows x64、Visual Studio 2022 C++ 桌面工具、`v143` 工具集和 PowerShell。
 
@@ -77,4 +83,16 @@ LocalMarkdownPreview 是一个轻量、离线的 Windows 资源管理器 Markdow
 - 安装器 AppId：`{C846D84E-793E-4FD5-9B65-FBF6AED37799}`
 - ProgID：`LocalMarkdownPreview.Handler.1`
 
-本项目采用 MIT 许可证。MD4C 0.5.3 也采用 MIT 许可证，固定版本和两处 MSVC 兼容补丁已在第三方文档中记录。
+## 许可证
+
+本项目采用 [MIT 许可证](LICENSE)。MD4C 0.5.3 也采用 MIT 许可证，固定版本和两处 MSVC 兼容补丁已在第三方文档中记录。
+
+---
+
+## English
+
+LocalMarkdownPreview is a lightweight, fully offline Markdown preview handler for the Windows File Explorer preview pane (Windows 10/11 x64). It renders Markdown natively (no browser engine, no scripts, no network), follows the system light/dark theme, and runs inside the low-privilege preview host.
+
+- **Install:** download the installer from Releases, run it, then enable the preview pane (Alt+P) and select a `.md` file.
+- **Build:** Visual Studio 2022 with C++ desktop workload (v143), then `.\build.ps1 -Configuration Release`; `.\package.ps1` builds the installer (requires Inno Setup 6).
+- **License:** MIT. Bundles MD4C 0.5.3 (MIT).

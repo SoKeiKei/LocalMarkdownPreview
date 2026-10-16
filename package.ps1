@@ -9,7 +9,8 @@ $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $buildScript = Join-Path $root 'build.ps1'
 $encodingScript = Join-Path $root 'tools\Test-TextEncoding.ps1'
 $installerScript = Join-Path $root 'installer\LocalMarkdownPreview.iss'
-$iscc = 'ISCC.exe'
+$iscc = if ($env:ISCC) { $env:ISCC } else { (Get-Command ISCC.exe -ErrorAction SilentlyContinue).Source }
+if (-not $iscc) { throw 'ISCC.exe not found. Install Inno Setup 6 and add it to PATH, or set $env:ISCC.' }
 $dist = Join-Path $root 'dist'
 $setupName = 'LocalMarkdownPreview-0.1.0-dev-x64.exe'
 $setupPath = Join-Path $dist $setupName
