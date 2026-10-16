@@ -1,0 +1,8 @@
+<Project>
+  <!-- Embed only the PDB file name (not the absolute build path) in released binaries. -->
+  <ItemDefinitionGroup>
+    <Link>
+      <AdditionalOptions>/PDBALTPATH:%_PDB% %(AdditionalOptions)</AdditionalOptions>
+    </Link>
+  </ItemDefinitionGroup>
+</Project>
