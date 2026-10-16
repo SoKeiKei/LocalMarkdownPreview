@@ -1,4 +1,4 @@
-# 不依赖 Pester 的注册脚本测试。
+﻿# 不依赖 Pester 的注册脚本测试。
 # 所有写入都位于本次运行生成的 HKCU 临时子键；finally 会清理该子键和备份文件。
 
 [CmdletBinding()]

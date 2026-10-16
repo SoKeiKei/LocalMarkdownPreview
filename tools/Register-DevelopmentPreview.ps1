@@ -1,4 +1,4 @@
-# 当前用户范围的 Markdown Preview Handler 开发注册工具。
+﻿# 当前用户范围的 Markdown Preview Handler 开发注册工具。
 #
 # 默认只检查并显示计划，不写入注册表。真正写入需要显式传入 -Apply；
 # 如发现已有其他处理器，仍需再传入 -AllowReplacement。-WhatIf 可用于演练。

@@ -1,4 +1,4 @@
-# 当前用户范围的 Markdown Preview Handler 开发卸载工具。
+﻿# 当前用户范围的 Markdown Preview Handler 开发卸载工具。
 #
 # 默认只检查并显示计划，不写入注册表。真正恢复需要显式传入 -Apply；
 # -WhatIf 可用于演练。恢复只使用注册时生成的备份，并且逐项检查当前值
