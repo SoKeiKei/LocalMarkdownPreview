@@ -32,7 +32,8 @@ foreach ($file in $files) {
     }
     $bytes = [System.IO.File]::ReadAllBytes($file.FullName)
 
-    if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) {
+    # PowerShell scripts keep a BOM so Windows PowerShell 5.1 reads them as UTF-8.
+    if ($file.Extension -ne '.ps1' -and $bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) {
         $problems.Add([ordered]@{ file = $relativePath; problem = 'UTF-8 BOM' })
         continue
     }

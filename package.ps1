@@ -123,7 +123,8 @@ if ($versionInfo.ProductName.Trim() -ne 'Local Markdown Preview' -or
 
 $hash = (Get-FileHash -LiteralPath $setupPath -Algorithm SHA256).Hash.ToUpperInvariant()
 [IO.File]::WriteAllText($hashPath, "$hash  $setupName`r`n", [Text.UTF8Encoding]::new($false))
-if ((Get-Content -LiteralPath $hashPath -Encoding UTF8 -Raw).StartsWith([char]0xFEFF)) {
+$hashBytes = [IO.File]::ReadAllBytes($hashPath)
+if ($hashBytes.Length -ge 3 -and $hashBytes[0] -eq 0xEF -and $hashBytes[1] -eq 0xBB -and $hashBytes[2] -eq 0xBF) {
     throw 'SHA256SUMS.txt 不得带 UTF-8 BOM。'
 }
 Write-Host "安装包已生成：$setupPath ($($setup.Length) bytes)"
